@@ -1,9 +1,8 @@
-from datasets import load_dataset
-from transformers import AutoTokenizer
-import html
+from src.data_loader import load_data
 
 def main():
-    print("Hello from patient-condition-classifier!")
+    dataset = load_data()
+    print(f"Loaded train and test datasets ({dataset['train']}) ({dataset['test']})")
 
 
 if __name__ == "__main__":
