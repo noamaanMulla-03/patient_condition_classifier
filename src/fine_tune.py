@@ -26,6 +26,7 @@ def fine_tune(
     label2id: dict,
     id2label: dict,
     num_labels: int,
+    model_dir: str = "./results",
 ) -> None:
     """
     Fine-tune DeBERTa-v3-base on the tokenized drug review dataset.
@@ -64,6 +65,10 @@ def fine_tune(
         Mapping from integer class IDs back to condition strings.
     num_labels : int
         Total number of unique conditions (classification classes).
+    model_dir : str
+        Directory for checkpoints during training and final model.
+        Defaults to "./results". On SageMaker, set to
+        /opt/ml/model (where SageMaker expects the final artifact).
 
     Returns
     -------
@@ -145,7 +150,7 @@ def fine_tune(
     #   - fp16: enabled only if a CUDA GPU is available.
     print("\nConfiguring training arguments...")
     training_args = TrainingArguments(
-        output_dir="./results",
+        output_dir=model_dir,
         eval_strategy="epoch",
         save_strategy="epoch",
         learning_rate=2e-5,
@@ -199,7 +204,9 @@ def fine_tune(
     # ------------------------------------------------------------------
     # Step 8: Save the final model
     # ------------------------------------------------------------------
-    final_dir = "./results/final-model"
+    # On SageMaker, model_dir points to /opt/ml/model and output_dir
+    # to /opt/ml/output. These are set from main.py via CLI args.
+    final_dir = f"{model_dir}/final-model"
     print(f"\nSaving final model to '{final_dir}/'...")
     trainer.save_model(final_dir)
     tokenizer.save_pretrained(final_dir)

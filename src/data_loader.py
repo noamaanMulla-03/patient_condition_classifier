@@ -20,7 +20,7 @@ DATA_FILES = {
 }
 
 
-def load_data() -> DatasetDict:
+def load_data(data_dir: str = "data") -> DatasetDict:
     """
     Load the raw drug review dataset from local TSV files.
 
@@ -39,12 +39,23 @@ def load_data() -> DatasetDict:
         - date        — date the review was posted
         - usefulCount — number of users who found the review helpful
 
+    Parameters
+    ----------
+    data_dir : str
+        Path to the directory containing drugsComTrain_raw.tsv and
+        drugsComTest_raw.tsv. Defaults to "data" for local use.
+        On SageMaker, set to /opt/ml/input/data/training.
+
     Returns
     -------
     DatasetDict
         A dictionary-like object with 'train' and 'test' Dataset keys.
     """
+    data_files = {
+        "train": f"{data_dir}/drugsComTrain_raw.tsv",
+        "test": f"{data_dir}/drugsComTest_raw.tsv",
+    }
     # load_dataset with "csv" and delimiter="\t" reads tab-separated
     # files. The library infers column types automatically from the
     # header row and data.
-    return load_dataset("csv", data_files=DATA_FILES, delimiter="\t")
+    return load_dataset("csv", data_files=data_files, delimiter="\t")

@@ -17,6 +17,9 @@ drug-dataset/
 # Tokenizer cache / Hugging Face artifacts
 *.safetensors
 
+# Secrets & environment
+.env
+
 # IDE
 .vscode/
 .idea/

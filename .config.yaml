@@ -1,0 +1,40 @@
+# ------------------------------------------------------------------
+# SageMaker configuration — tunable knobs for launching training.
+# Secrets (bucket name, role ARN) go in .env, not here.
+# ------------------------------------------------------------------
+
+# Instance & environment
+instance_type: ml.g5.xlarge # A10G, 24 GB VRAM, ~$1.00/hr
+instance_count: 1
+volume_size: 50 # GB disk
+py_version: py310
+pytorch_version: 2.0.1
+transformers_version: 4.36.2
+
+# S3 folder prefix (within your bucket)
+s3_prefix: data
+
+# Environment variables passed to the training container
+environment:
+    HF_HUB_ENABLE_HF_TRANSFER: "1" # faster Hugging Face downloads
+    TOKENIZERS_PARALLELISM: "true"
+
+# Hyperparameters injected into the estimator.
+# Uncomment and set values to override the hardcoded defaults in
+# fine_tune.py. Currently all empty — defaults are used.
+#
+# When populated, SageMaker sets SM_HP_<NAME> env vars on the
+# instance (e.g. SM_HP_EPOCHS=5).  To actually use them, wire
+# sagemaker_entry.py → main.py → fine_tune.py (not yet plumbed).
+#
+hyperparameters:
+    # epochs: 3                  # number of training epochs
+    # batch_size: 16             # per-device batch size
+    # eval_batch_size: 16        # per-device eval batch size
+    # learning_rate: 2e-5        # peak learning rate (AdamW)
+    # weight_decay: 0.01         # weight decay (AdamW)
+    # max_length: 128            # max tokenized sequence length
+    # warmup_ratio: 0.0          # fraction of steps for LR warmup
+    # gradient_accumulation_steps: 1  # simulate larger batch sizes
+    # seed: 42                   # random seed for reproducibility
+    # checkpoint: microsoft/deberta-v3-base  # Hugging Face model ID
