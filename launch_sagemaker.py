@@ -4,15 +4,14 @@ Launch a SageMaker training job for the Patient Condition Classifier.
 
 Reads secrets from .env and all tunable configuration from .config.yaml.
 
+Requires SageMaker SDK v2 (pip install "sagemaker<3").
+
 Prerequisites:
   1. Copy .env.example → .env and fill in your AWS credentials.
-  2. Install: pip install sagemaker python-dotenv pyyaml
+  2. Install: pip install "sagemaker<3" python-dotenv pyyaml
   3. Upload the two TSV files to your S3 bucket:
        aws s3 cp data/drugsComTrain_raw.tsv s3://<bucket>/data/
        aws s3 cp data/drugsComTest_raw.tsv  s3://<bucket>/data/
-
-Run this script directly (not as a notebook — the # %% markers are
-for VS Code interactive mode if you prefer that).
 """
 
 import os
@@ -21,6 +20,7 @@ import sagemaker
 import yaml
 from dotenv import load_dotenv
 from sagemaker.huggingface import HuggingFace
+from sagemaker.image_uris import retrieve
 
 # ------------------------------------------------------------------
 # Load secrets from .env
@@ -44,13 +44,45 @@ session = sagemaker.Session()
 print(f"SageMaker session in region: {session.boto_region_name}")
 
 # ------------------------------------------------------------------
-# Create the estimator
+# Resolve the container image URI explicitly (avoids hang)
 # ------------------------------------------------------------------
-# This packages main.py, src/*, sagemaker_entry.py, and all project
-# files into a tar.gz and uploads it to S3.
+# Pre-resolving the image URI outside the HuggingFace constructor
+# skips a known internal hang during ECR queries.
+image_uri = retrieve(
+    "huggingface",
+    region=REGION,
+    version=cfg["transformers_version"],
+    base_framework_version=f"pytorch{cfg['pytorch_version']}",
+    py_version=cfg["py_version"],
+    image_scope="training",
+    instance_type=cfg["instance_type"],
+)
+print(f"Using image: {image_uri}")
+
+# ------------------------------------------------------------------
+# Stage only the needed files into a temp directory
+# ------------------------------------------------------------------
+# source_dir="." packages EVERYTHING (including .venv, data/, results/)
+# which is hundreds of MB and hangs on upload.  Instead we create a
+# minimal staging dir with only the files SageMaker needs.
+import shutil
+import tempfile
+
+staging = tempfile.mkdtemp(prefix="sm-stage-")
+print(f"Staging source in: {staging}")
+shutil.copy("sagemaker_entry.py", staging)
+shutil.copy("main.py", staging)
+shutil.copytree("src", f"{staging}/src")
+print("Staging complete.")
+
+# ------------------------------------------------------------------
+# Create the HuggingFace estimator
+# ------------------------------------------------------------------
+print("Creating estimator...")
 estimator = HuggingFace(
     entry_point="sagemaker_entry.py",
-    source_dir=".",
+    source_dir=staging,
+    image_uri=image_uri,
     instance_type=cfg["instance_type"],
     instance_count=cfg["instance_count"],
     role=ROLE,
@@ -62,18 +94,18 @@ estimator = HuggingFace(
     volume_size=cfg["volume_size"],
     keep_alive_period_in_seconds=0,
 )
+print("Estimator created.")
 
 # ------------------------------------------------------------------
-# Launch training
+# Launch training (non-blocking — don't wait for completion)
 # ------------------------------------------------------------------
-# SageMaker copies the S3 data to /opt/ml/input/data/training on the
-# instance. sagemaker_entry.py reads it from there.
+print("Submitting training job...")
 estimator.fit(
-    {
-        "training": f"s3://{S3_BUCKET}/{cfg['s3_prefix']}/",
-    }
+    {"training": f"s3://{S3_BUCKET}/{cfg['s3_prefix']}/"},
+    wait=False,
 )
 
-print("\nTraining job submitted! Monitor at:")
+print(f"\nTraining job submitted: {estimator.latest_training_job.name}")
+print("Monitor at:")
 print(f"  https://{REGION}.console.aws.amazon.com/sagemaker/home#/jobs")
 print(f"\nThe trained model will be at: s3://{session.default_bucket()}/")

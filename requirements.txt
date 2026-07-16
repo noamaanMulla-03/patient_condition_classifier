@@ -7,7 +7,7 @@ annotated-doc==0.0.4
 annotated-types==0.7.0
 antlr4-python3-runtime==4.9.3
 anyio==4.14.2
-attrs==26.1.0
+attrs==25.4.0
 bcrypt==5.0.0
 blinker==1.9.0
 boto3==1.43.49
@@ -42,6 +42,7 @@ geventhttpclient==2.3.9
 gitdb==4.0.12
 gitpython==3.1.52
 google-auth==2.56.0
+google-pasta==0.2.0
 graphene==3.4.3
 graphql-core==3.2.11
 graphql-relay==3.2.0
@@ -91,12 +92,15 @@ opentelemetry-proto==1.43.0
 opentelemetry-sdk==1.43.0
 opentelemetry-semantic-conventions==0.64b0
 orderly-set==5.5.0
-packaging==26.2
+packaging==24.2
 pandas==2.3.3
 paramiko==5.0.0
+pathos==0.3.5
 pillow==12.3.0
 platformdirs==4.10.0
 pluggy==1.6.0
+pox==0.3.7
+ppft==1.7.8
 prettytable==3.18.0
 propcache==0.5.2
 protobuf==6.33.6
@@ -126,8 +130,8 @@ rpds-py==2026.6.3
 s3fs==0.4.2
 s3transfer==0.19.1
 safetensors==0.8.0
-sagemaker==3.16.0
-sagemaker-core==2.16.0
+sagemaker==2.257.5
+sagemaker-core==1.0.78
 sagemaker-mlflow==0.5.0
 sagemaker-mlops==1.16.0
 sagemaker-schema-inference-artifacts==0.0.5
