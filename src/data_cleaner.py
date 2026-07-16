@@ -1,3 +1,4 @@
+import re
 from datasets import DatasetDict
 import html
 
@@ -11,9 +12,10 @@ def clean_data(dataset: DatasetDict) -> DatasetDict:
     2. Filters out rows where 'drugName' or 'condition' are null.
     3. Converts 'drugName' and 'condition' to lowercase for consistency.
     4. Unescapes HTML entities (e.g., &amp;, &lt;) in the review text.
-    5. Computes a 'reviewLength' field (word count of the review).
-    6. Removes very short reviews (≤30 words) as they lack useful signal.
-    7. Splits the training data into train (80%) and validation (20%),
+    5. Strips HTML tags from condition labels.
+    6. Computes a 'reviewLength' field (word count of the review).
+    7. Removes very short reviews (≤30 words) as they lack useful signal.
+    8. Splits the training data into train (80%) and validation (20%),
        while preserving the original test split for final evaluation.
 
     Args:
@@ -73,7 +75,23 @@ def clean_data(dataset: DatasetDict) -> DatasetDict:
     )
 
     # ------------------------------------------------------------------
-    # Step 5: Compute review length (word count)
+    # Step 5: Strip HTML tags from condition labels
+    # ------------------------------------------------------------------
+    # Some rows have HTML markup in the condition field (e.g.
+    # "0</span> users found this comment helpful."), likely from
+    # scraping artifacts. We strip any HTML tags so the labels are
+    # clean text. Rows are kept — the review text is still useful even
+    # if the condition label has residual noise.
+    dataset = dataset.map(
+        lambda x: {
+            **x,
+            "condition": [re.sub(r"<[^>]+>", "", c) for c in x["condition"]],
+        },
+        batched=True,
+    )
+
+    # ------------------------------------------------------------------
+    # Step 6: Compute review length (word count)
     # ------------------------------------------------------------------
     # reviewLength stores the number of words per review, which can be
     # used as a feature or filtering criterion.
@@ -83,14 +101,14 @@ def clean_data(dataset: DatasetDict) -> DatasetDict:
     )
 
     # ------------------------------------------------------------------
-    # Step 6: Remove very short reviews
+    # Step 7: Remove very short reviews
     # ------------------------------------------------------------------
     # Reviews with 30 or fewer words are unlikely to contain meaningful
     # patient condition information, so we filter them out.
     dataset = dataset.filter(lambda x: x["reviewLength"] > 30)
 
     # ------------------------------------------------------------------
-    # Step 7: Create a validation split from the training data
+    # Step 8: Create a validation split from the training data
     # ------------------------------------------------------------------
     # The original dataset has only 'train' and 'test' splits. We split
     # the training data further: 80% for training, 20% for validation.
