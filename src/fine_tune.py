@@ -81,9 +81,9 @@ def fine_tune(
     # ------------------------------------------------------------------
     # Automatically detect device for mixed precision
     # ------------------------------------------------------------------
-    # fp16 is only available on CUDA (NVIDIA GPUs). Apple Silicon (MPS)
-    # and CPU fall back to fp32.
-    use_fp16 = torch.cuda.is_available()
+    # DeBERTa-v3 doesn't support fp16 (disentangled attention breaks).
+    # We use bf16 instead if available (Ampere+ GPUs), otherwise fp32.
+    use_fp16 = False  # kept for reference; bf16 is used instead
 
     # ------------------------------------------------------------------
     # Step 1: Remove unnecessary columns
@@ -147,7 +147,10 @@ def fine_tune(
     #   - num_train_epochs=3: enough to converge without overfitting.
     #   - eval_strategy="epoch": evaluate once per epoch.
     #   - load_best_model_at_end: keeps the epoch with best accuracy.
-    #   - fp16: enabled only if a CUDA GPU is available.
+    #   - bf16: used instead of fp16 because DeBERTa-v3's disentangled
+    #     attention breaks with fp16 gradients. bf16 is available on
+    #     Ampere+ GPUs (A100, A10G). T4 and MPS fall back to fp32.
+    use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     print("\nConfiguring training arguments...")
     training_args = TrainingArguments(
         output_dir=model_dir,
@@ -164,7 +167,8 @@ def fine_tune(
         load_best_model_at_end=True,
         metric_for_best_model="accuracy",
         greater_is_better=True,
-        fp16=use_fp16,
+        fp16=False,
+        bf16=use_bf16,
         dataloader_num_workers=2,
         remove_unused_columns=False,
     )
