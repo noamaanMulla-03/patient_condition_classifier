@@ -6,7 +6,8 @@ This script orchestrates the full data preprocessing workflow:
      src.data_loader.load_data().
   2. Cleans and preprocesses the dataset via src.data_cleaner.clean_data().
   3. Tokenizes the reviews via src.tokenizer.tokenize_data().
-  4. Displays summary information about the final tokenized dataset.
+  4. Saves the tokenized dataset to disk for later use.
+  5. Displays summary information about the final tokenized dataset.
 """
 
 from src.data_loader import load_data
@@ -16,7 +17,7 @@ from src.tokenizer import tokenize_data
 
 def main() -> None:
     """
-    Run the full data pipeline — load, clean, tokenize, and report.
+    Run the full data pipeline — load, clean, tokenize, save, and report.
 
     Steps
     -----
@@ -26,7 +27,9 @@ def main() -> None:
        engineering, and train/validation/test splitting.
     3. Tokenize: Convert review text to token IDs with overflow
        handling for sequences exceeding 128 tokens.
-    4. Report: Print a summary of the final tokenized dataset splits
+    4. Save: Persist the tokenized dataset to disk so it can be
+       loaded later without re-running preprocessing.
+    5. Report: Print a summary of the final tokenized dataset splits
        so the user can verify the pipeline ran correctly.
 
     Returns
@@ -64,6 +67,18 @@ def main() -> None:
     # columns duplicated to maintain alignment.
     tokenized_dataset = tokenize_data(cleaned_dataset)
     print(f"Tokenized dataset: {tokenized_dataset}")
+
+    # ------------------------------------------------------------------
+    # Step 4: Save the tokenized dataset to disk
+    # ------------------------------------------------------------------
+    # save_to_disk() persists the DatasetDict as a directory of Arrow
+    # files on disk. This avoids re-running the entire preprocessing
+    # pipeline on subsequent runs — just use load_from_disk() instead.
+    #
+    # The dataset is saved to "drug-dataset/" in the project root.
+    print("Saving tokenized dataset to disk...")
+    tokenized_dataset.save_to_disk("drug-dataset")
+    print("Done — tokenized dataset saved to 'drug-dataset/'.")
 
 
 # ------------------------------------------------------------------

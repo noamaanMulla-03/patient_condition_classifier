@@ -9,6 +9,18 @@ wheels/
 # Virtual environments
 .venv
 
-# Datasets
+# Datasets and model outputs
 data/*.tsv
 data/*.csv
+drug-dataset/
+
+# Tokenizer cache / Hugging Face artifacts
+*.safetensors
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

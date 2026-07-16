@@ -1,7 +1,7 @@
 [project]
 name = "patient-condition-classifier"
 version = "0.1.0"
-description = "Add your description here"
+description = "Preprocesses the UCI Drug Reviews dataset for patient condition classification using DeBERTa-v3"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
