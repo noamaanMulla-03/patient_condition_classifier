@@ -90,6 +90,26 @@ def clean_data(dataset: DatasetDict) -> DatasetDict:
         batched=True,
     )
 
+    # Filter out rows whose condition is still obvious scraper junk
+    # after the HTML stripping — e.g. "0 users found this comment
+    # helpful." These have no learnable relationship to review text
+    # and cause NaN gradients during training.
+    print("  Filtering junk labels (non-medical conditions)...")
+    for split in list(dataset.keys()):
+        before = len(dataset[split])
+        dataset[split] = dataset[split].filter(
+            lambda x: "user" not in x["condition"]
+            and "found" not in x["condition"]
+            and len(x["condition"]) <= 100
+            and any(c.isalpha() for c in x["condition"])
+        )
+        after = len(dataset[split])
+        if before > after:
+            print(
+                f"    {split}: removed {before - after} junk label rows"
+                f" ({before} → {after})"
+            )
+
     # ------------------------------------------------------------------
     # Step 6: Compute review length (word count)
     # ------------------------------------------------------------------
