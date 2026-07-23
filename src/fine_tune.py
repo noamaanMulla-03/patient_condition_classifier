@@ -18,6 +18,13 @@ from transformers import (
     Trainer,
 )
 
+# ------------------------------------------------------------------
+# Module-level metric loaders — avoids downloading from Hugging Face
+# Hub on every SageMaker training job startup (~30s saved).
+# ------------------------------------------------------------------
+ACCURACY_METRIC = evaluate.load("accuracy")
+F1_METRIC = evaluate.load("f1")
+
 
 def fine_tune(
     tokenized_dataset: DatasetDict,
@@ -84,7 +91,6 @@ def fine_tune(
     # ------------------------------------------------------------------
     # DeBERTa-v3 doesn't support fp16 (disentangled attention breaks).
     # We use bf16 instead if available (Ampere+ GPUs), otherwise fp32.
-    use_fp16 = False  # kept for reference; bf16 is used instead
 
     # ------------------------------------------------------------------
     # Step 1: Remove unnecessary columns
@@ -124,15 +130,15 @@ def fine_tune(
     #   - accuracy: % of predictions that exactly match the true label.
     #   - weighted F1: harmonic mean of precision & recall, weighted by
     #     class support (accounts for class imbalance).
-    accuracy_metric = evaluate.load("accuracy")
-    f1_metric = evaluate.load("f1")
+    # Metric loaders are module-level constants to avoid re-downloading
+    # from HF Hub on every training run.
 
     def compute_metrics(eval_pred):
         """Calculate accuracy and weighted F1 from model predictions."""
         predictions, labels = eval_pred
         predictions = np.argmax(predictions, axis=-1)
-        acc = accuracy_metric.compute(predictions=predictions, references=labels)
-        f1 = f1_metric.compute(
+        acc = ACCURACY_METRIC.compute(predictions=predictions, references=labels)
+        f1 = F1_METRIC.compute(
             predictions=predictions, references=labels, average="weighted"
         )
         return {**acc, **f1}
@@ -146,7 +152,7 @@ def fine_tune(
     #   - learning_rate=2e-5: standard for fine-tuning transformers.
     #   - batch_size=16: fits most GPUs with 8-16 GB VRAM.
     #   - num_train_epochs=3: enough to converge without overfitting.
-    #   - eval_strategy="steps": evaluate every eval_steps for finer-
+    #   - evaluation_strategy="steps": evaluate every eval_steps for finer-
     #     grained early-stopping control (~16 evals/epoch at 500 steps).
     #   - load_best_model_at_end: loads the checkpoint with best accuracy
     #     (not necessarily the last one) after training finishes.
@@ -160,7 +166,7 @@ def fine_tune(
     print("\nConfiguring training arguments...")
     training_args = TrainingArguments(
         output_dir=model_dir,
-        eval_strategy="steps",
+        evaluation_strategy="steps",
         eval_steps=500,
         save_strategy="steps",
         save_steps=500,
@@ -169,6 +175,8 @@ def fine_tune(
         per_device_eval_batch_size=16,
         num_train_epochs=3,
         weight_decay=0.01,
+        warmup_ratio=0.1,
+        gradient_accumulation_steps=2,
         logging_steps=100,
         logging_first_step=True,
         save_total_limit=2,
@@ -177,6 +185,7 @@ def fine_tune(
         greater_is_better=True,
         fp16=False,
         bf16=use_bf16,
+        seed=42,
         dataloader_num_workers=2,
         remove_unused_columns=False,
     )
@@ -191,7 +200,7 @@ def fine_tune(
         args=training_args,
         train_dataset=tokenized_dataset["train"],
         eval_dataset=tokenized_dataset["validation"],
-        processing_class=tokenizer,
+        tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
         callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
@@ -213,6 +222,17 @@ def fine_tune(
     print("=" * 60)
     eval_results = trainer.evaluate()
     print(f"\nValidation results: {eval_results}")
+
+    # ------------------------------------------------------------------
+    # Step 7b: Evaluate on the held-out test set
+    # ------------------------------------------------------------------
+    # The test split was never seen during training or hyperparameter
+    # tuning — this gives an unbiased estimate of real-world performance.
+    print("\n" + "=" * 60)
+    print("Evaluating on held-out test set...")
+    print("=" * 60)
+    test_results = trainer.evaluate(tokenized_dataset["test"])
+    print(f"\nTest results: {test_results}")
 
     # ------------------------------------------------------------------
     # Step 8: Save the final model

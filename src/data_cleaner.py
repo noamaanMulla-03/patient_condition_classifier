@@ -134,7 +134,7 @@ def clean_data(dataset: DatasetDict) -> DatasetDict:
     # the training data further: 80% for training, 20% for validation.
     # The original test split is preserved for final evaluation.
     original_test = dataset["test"]
-    splits = dataset["train"].train_test_split(train_size=0.8)
+    splits = dataset["train"].train_test_split(train_size=0.8, seed=42)
     dataset["train"] = splits["train"]
     dataset["validation"] = splits["test"]
     dataset["test"] = original_test

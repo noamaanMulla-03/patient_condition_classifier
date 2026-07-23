@@ -16,7 +16,7 @@ s3_prefix: data
 
 # Environment variables passed to the training container
 environment:
-    HF_HUB_ENABLE_HF_TRANSFER: "1" # faster Hugging Face downloads
+    # HF_HUB_ENABLE_HF_TRANSFER: "1"  # disabled — hf_transfer not in SageMaker container
     TOKENIZERS_PARALLELISM: "true"
 
 # Hyperparameters injected into the estimator.

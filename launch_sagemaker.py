@@ -72,7 +72,11 @@ staging = tempfile.mkdtemp(prefix="sm-stage-")
 print(f"Staging source in: {staging}")
 shutil.copy("sagemaker_entry.py", staging)
 shutil.copy("main.py", staging)
-shutil.copytree("src", f"{staging}/src")
+shutil.copytree(
+    "src",
+    f"{staging}/src",
+    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
+)
 print("Staging complete.")
 
 # ------------------------------------------------------------------

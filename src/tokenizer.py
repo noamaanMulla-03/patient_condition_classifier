@@ -13,14 +13,13 @@ source of configuration and avoid duplicate loading.
 
 def tokenize_and_split(data, tokenizer):
     """
-    Tokenise a batch of reviews and handle sequences that overflow.
+    Tokenise a batch of reviews, truncating to max_model_length.
 
-    The DeBERTa model has a maximum input length of 128 tokens (as
-    configured below). Reviews that exceed this limit are split into
-    multiple non-overlapping chunks, each of length <= max_length.
-    This function duplicates the corresponding non-review columns
-    (e.g. condition, rating) so that each chunk becomes its own row
-    in the dataset — preserving alignment between inputs and labels.
+    Uses a 512-token limit — the maximum DeBERTa-v3-base supports.
+    Reviews longer than this are truncated to the first 512 tokens
+    (no overflow splitting). This keeps every review as a single
+    sample and avoids noisy partial-text chunks being trained with
+    the same label.
 
     Parameters
     ----------
@@ -34,49 +33,19 @@ def tokenize_and_split(data, tokenizer):
     -------
     dict of list
         A dictionary with tokenizer outputs (input_ids, attention_mask)
-        plus all original non-review columns, now expanded to match
-        the number of overflow chunks.
+        plus all original non-review columns.
     """
     # ------------------------------------------------------------------
-    # Step 1: Run the tokeniser on the batch of reviews
+    # Run the tokeniser on the batch of reviews
     # ------------------------------------------------------------------
-    # When return_overflowing_tokens=True, the tokeniser splits long
-    # sequences into chunks of max_length tokens. It also returns
-    # an 'overflow_to_sample_mapping' array that records which
-    # original row each chunk came from.
-    #
-    # truncation=True ensures we don't silently keep tokens beyond
-    # max_length — they are split off into overflow chunks instead.
+    # truncation=True clips to max_length (no overflow — one review,
+    # one sample). 512 tokens covers ~95% of reviews in full.
     result = tokenizer(
         data["review"],
         truncation=True,
-        max_length=128,
-        return_overflowing_tokens=True,
+        padding=False,
+        max_length=512,
     )
-
-    # ------------------------------------------------------------------
-    # Step 2: Extract the overflow mapping
-    # ------------------------------------------------------------------
-    # 'overflow_to_sample_mapping' is a list where index i holds the
-    # index of the original row that produced overflow chunk i.
-    # Example: if row 0 splits into 3 chunks, the mapping starts
-    # [0, 0, 0, 1, 1, ...].
-    #
-    # We pop it from 'result' because we only needed it temporarily
-    # — it is not a model input and should not be passed to training.
-    sample_map = result.pop("overflow_to_sample_mapping")
-
-    # ------------------------------------------------------------------
-    # Step 3: Duplicate non-review columns to match overflow chunks
-    # ------------------------------------------------------------------
-    # For each key (e.g. 'condition', 'rating', 'drugName'), we use
-    # the sample_map to look up which original row value each overflow
-    # chunk should inherit. This keeps every chunk aligned with its
-    # original label, even after splitting long reviews.
-    for key, values in data.items():
-        result[key] = [values[i] for i in sample_map]
-
-    return result
 
 
 def tokenize_data(dataset, tokenizer):
