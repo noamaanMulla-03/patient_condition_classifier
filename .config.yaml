@@ -4,7 +4,7 @@
 # ------------------------------------------------------------------
 
 # Instance & environment
-instance_type: ml.g4dn.xlarge # T4, 16 GB VRAM, ~$0.70/hr
+instance_type: ml.g6.xlarge # L4, 24 GB VRAM, bf16, ~$0.80/hr
 instance_count: 1
 volume_size: 50 # GB disk
 py_version: py310

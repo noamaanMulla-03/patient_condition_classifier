@@ -2,7 +2,7 @@
 
 Fine-tunes **DeBERTa-v3-base** on the [UCI Drug Reviews dataset](https://archive.ics.uci.edu/dataset/462/drug+review+dataset+drugs+com) to predict patient conditions from drug review text.
 
-The pipeline loads raw TSV files, cleans and normalises the text, tokenizes reviews with overflow handling, fine-tunes a transformer classifier, and saves the trained model to disk.
+The pipeline loads raw TSV files, cleans and normalises the text, tokenizes reviews (512 tokens, simple truncation), fine-tunes a transformer classifier with early stopping and test-set evaluation, and saves the trained model to disk.
 
 ## Pipeline Overview
 
@@ -12,13 +12,13 @@ drugsComTrain_raw.tsv ─┐
 drugsComTest_raw.tsv  ─┘
 ```
 
-| Step | Module                | Description                                                                                                                          |
-| ---- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| 1    | `src/data_loader.py`  | Reads the raw TSV files using Hugging Face `datasets`                                                                                |
-| 2    | `src/data_cleaner.py` | Renames columns, filters nulls, lowercases text, unescapes HTML, strips junk labels, removes short reviews, creates validation split |
-| 3    | `src/tokenizer.py`    | Tokenizes with `microsoft/deberta-v3-base` (max 128 tokens, overflow chunking), builds label mappings                                |
-| 4    | `src/fine_tune.py`    | Fine-tunes DeBERTa-v3-base for sequence classification (accuracy + weighted F1 metrics)                                              |
-| 5    | `main.py`             | Orchestrates the full pipeline end-to-end                                                                                            |
+| Step | Module                | Description                                                                                                                                    |
+| ---- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | `src/data_loader.py`  | Reads the raw TSV files using Hugging Face `datasets`                                                                                          |
+| 2    | `src/data_cleaner.py` | Renames columns, filters nulls, lowercases text, unescapes HTML, strips junk labels, removes short reviews, creates validation split (seed=42) |
+| 3    | `src/tokenizer.py`    | Tokenizes with `microsoft/deberta-v3-base` (max 512 tokens, simple truncation), builds label mappings                                          |
+| 4    | `src/fine_tune.py`    | Fine-tunes DeBERTa-v3-base for sequence classification (accuracy + weighted F1 metrics, early stopping, test-set evaluation)                   |
+| 5    | `main.py`             | Orchestrates the full pipeline end-to-end (caches tokenized dataset to disk)                                                                   |
 
 ## Dataset
 
@@ -151,6 +151,21 @@ print(dataset)
 ### Inference
 
 ```python
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+model = AutoModelForSequenceClassification.from_pretrained("results/final-model")
+tokenizer = AutoTokenizer.from_pretrained("results/final-model")
+
+review = "I've been taking this for 3 months and my anxiety has significantly reduced."
+inputs = tokenizer(review, truncation=True, max_length=512, return_tensors="pt")
+outputs = model(**inputs)
+predicted_id = outputs.logits.argmax(dim=-1).item()
+print(model.config.id2label[predicted_id])  # e.g. "anxiety"
+```
+
+Or use the `pipeline` API:
+
+```python
 from transformers import pipeline
 
 classifier = pipeline("text-classification", model="results/final-model", tokenizer="results/final-model")
@@ -158,21 +173,36 @@ result = classifier("I've been taking this for 3 months and my anxiety has signi
 print(result[0]["label"])  # predicted condition
 ```
 
+### Evaluation
+
+The training script reports metrics on **two** held-out sets:
+
+- **Validation**: used during training for early stopping and checkpoint selection
+- **Test**: evaluated after training completes — gives an unbiased estimate of real-world performance
+
 ## Training Configuration
 
-| Parameter            | Value                       |
-| -------------------- | --------------------------- |
-| Model                | `microsoft/deberta-v3-base` |
-| Max sequence length  | 128 tokens                  |
-| Batch size           | 16                          |
-| Learning rate        | 2e-5                        |
-| Epochs               | 3                           |
-| Weight decay         | 0.01                        |
-| Mixed precision      | bf16 (if available) / fp32  |
-| Evaluation           | Accuracy + weighted F1      |
-| Best model selection | Highest validation accuracy |
+| Parameter            | Value                                        |
+| -------------------- | -------------------------------------------- |
+| Model                | `microsoft/deberta-v3-base`                  |
+| Max sequence length  | 512 tokens                                   |
+| Batch size           | 16 (effective 32 with gradient accumulation) |
+| Learning rate        | 2e-5                                         |
+| Warmup ratio         | 10%                                          |
+| Epochs               | 3 (max)                                      |
+| Weight decay         | 0.01                                         |
+| Seed                 | 42 (reproducible)                            |
+| Mixed precision      | bf16 (if available) / fp32                   |
+| Evaluation           | Accuracy + weighted F1                       |
+| Early stopping       | Patience of 3 (1,500 steps)                  |
+| Best model selection | Highest validation accuracy                  |
+| Checkpoint retention | Last 2 checkpoints kept                      |
 
-> **Note:** DeBERTa-v3 does not support fp16 due to its disentangled attention mechanism. The pipeline automatically uses bf16 on Ampere+ GPUs (A100, A10G) and falls back to fp32 on T4 and Apple Silicon.
+> **Note:** DeBERTa-v3 does not support fp16 due to its disentangled attention mechanism. The pipeline automatically uses bf16 on Ampere+ GPUs (A100, A10G, L4) and falls back to fp32 on T4 and Apple Silicon.
+
+### SageMaker Instance
+
+Default instance: **`ml.g6.xlarge`** (NVIDIA L4, 24 GB VRAM). This enables bf16 training at ~$0.80/hr — roughly 2–3× faster than a T4 (`ml.g4dn.xlarge`) for ~10% higher cost per hour, making it cheaper per training run overall. Instance type can be changed in `.config.yaml`.
 
 ## Project Structure
 
@@ -192,7 +222,7 @@ patient-condition-classifier/
 └── src/
     ├── data_loader.py       # Loads raw TSV files
     ├── data_cleaner.py      # Cleans and preprocesses (8 steps)
-    ├── tokenizer.py         # Tokenizes with overflow handling + label mapping
+    ├── tokenizer.py         # Tokenizes with truncation (512 tokens) + label mapping
     └── fine_tune.py         # Fine-tunes DeBERTa-v3-base classifier
 ```
 
