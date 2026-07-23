@@ -47,6 +47,16 @@ def tokenize_and_split(data, tokenizer):
         max_length=512,
     )
 
+    # ------------------------------------------------------------------
+    # Propagate original columns (condition, drugName, rating, etc.)
+    # into the tokenized output. Since there's no overflow splitting,
+    # it's a straight 1:1 copy — no need for overflow_to_sample_mapping.
+    # ------------------------------------------------------------------
+    for key, values in data.items():
+        result[key] = values
+
+    return result
+
 
 def tokenize_data(dataset, tokenizer):
     """
