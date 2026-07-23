@@ -13,6 +13,7 @@ import evaluate
 from datasets import DatasetDict
 from transformers import (
     AutoModelForSequenceClassification,
+    EarlyStoppingCallback,
     TrainingArguments,
     Trainer,
 )
@@ -145,8 +146,13 @@ def fine_tune(
     #   - learning_rate=2e-5: standard for fine-tuning transformers.
     #   - batch_size=16: fits most GPUs with 8-16 GB VRAM.
     #   - num_train_epochs=3: enough to converge without overfitting.
-    #   - eval_strategy="epoch": evaluate once per epoch.
-    #   - load_best_model_at_end: keeps the epoch with best accuracy.
+    #   - eval_strategy="steps": evaluate every eval_steps for finer-
+    #     grained early-stopping control (~16 evals/epoch at 500 steps).
+    #   - load_best_model_at_end: loads the checkpoint with best accuracy
+    #     (not necessarily the last one) after training finishes.
+    #   - EarlyStoppingCallback: stops training if validation accuracy
+    #     doesn't improve for patience * eval_steps consecutive steps,
+    #     saving GPU time and preventing overfitting.
     #   - bf16: used instead of fp16 because DeBERTa-v3's disentangled
     #     attention breaks with fp16 gradients. bf16 is available on
     #     Ampere+ GPUs (A100, A10G). T4 and MPS fall back to fp32.
@@ -154,8 +160,10 @@ def fine_tune(
     print("\nConfiguring training arguments...")
     training_args = TrainingArguments(
         output_dir=model_dir,
-        eval_strategy="epoch",
-        save_strategy="epoch",
+        eval_strategy="steps",
+        eval_steps=500,
+        save_strategy="steps",
+        save_steps=500,
         learning_rate=2e-5,
         per_device_train_batch_size=16,
         per_device_eval_batch_size=16,
@@ -186,6 +194,7 @@ def fine_tune(
         processing_class=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
     )
 
     # ------------------------------------------------------------------
