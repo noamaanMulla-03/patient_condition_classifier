@@ -36,12 +36,22 @@ def tokenize_and_split(data, tokenizer):
         plus all original non-review columns.
     """
     # ------------------------------------------------------------------
-    # Run the tokeniser on the batch of reviews
+    # Prepend drug name to review text as a predictive signal.
+    # ------------------------------------------------------------------
+    # The drug name is a strong clue — "Levora" almost always means
+    # "birth control", "Chantix" → "smoking cessation". Prepending it
+    # gives the model this context without any architecture changes.
+    reviews = [
+        f"Drug: {d}. Review: {r}" for d, r in zip(data["drugName"], data["review"])
+    ]
+
+    # ------------------------------------------------------------------
+    # Run the tokeniser on the augmented reviews
     # ------------------------------------------------------------------
     # truncation=True clips to max_length (no overflow — one review,
     # one sample). 512 tokens covers ~95% of reviews in full.
     result = tokenizer(
-        data["review"],
+        reviews,
         truncation=True,
         padding=False,
         max_length=512,

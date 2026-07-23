@@ -37,4 +37,4 @@ hyperparameters:
     # warmup_ratio: 0.0          # fraction of steps for LR warmup
     # gradient_accumulation_steps: 1  # simulate larger batch sizes
     # seed: 42                   # random seed for reproducibility
-    # checkpoint: microsoft/deberta-v3-base  # Hugging Face model ID
+    # checkpoint: microsoft/deberta-v3-large  # Hugging Face model ID

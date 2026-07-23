@@ -67,7 +67,7 @@ def main(
     # Step 3: Load the tokeniser and data collator (once)
     # ------------------------------------------------------------------
     print("\nLoading tokenizer...")
-    checkpoint = "microsoft/deberta-v3-base"
+    checkpoint = "microsoft/deberta-v3-large"
     tokenizer = AutoTokenizer.from_pretrained(checkpoint)
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
     print("Tokenizer loaded.")

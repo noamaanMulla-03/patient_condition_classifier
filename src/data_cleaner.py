@@ -15,7 +15,9 @@ def clean_data(dataset: DatasetDict) -> DatasetDict:
     5. Strips HTML tags from condition labels.
     6. Computes a 'reviewLength' field (word count of the review).
     7. Removes very short reviews (≤30 words) as they lack useful signal.
-    8. Splits the training data into train (80%) and validation (20%),
+    8. Filters low-rated reviews (rating < 4) unless community-validated
+       (usefulCount ≥ 5) — removes noisy rants.
+    9. Splits the training data into train (80%) and validation (20%),
        while preserving the original test split for final evaluation.
 
     Args:
@@ -128,7 +130,29 @@ def clean_data(dataset: DatasetDict) -> DatasetDict:
     dataset = dataset.filter(lambda x: x["reviewLength"] > 30)
 
     # ------------------------------------------------------------------
-    # Step 8: Create a validation split from the training data
+    # Step 8: Filter low-quality (low-rated) reviews
+    # ------------------------------------------------------------------
+    # Reviews rated 1–3 are often rants with zero clinical signal
+    # (e.g. "THIS MEDICINE IS GARBAGE. Waste of money!!!").
+    # They add noise without useful condition information.
+    # However, keep low-rated reviews if other users found them
+    # helpful — those tend to be well-written negative experiences
+    # that still mention the condition.
+    print("  Filtering low-quality reviews (rating < 4 and not helpful)...")
+    for split in list(dataset.keys()):
+        before = len(dataset[split])
+        dataset[split] = dataset[split].filter(
+            lambda x: x["rating"] >= 4.0 or x["usefulCount"] >= 5
+        )
+        after = len(dataset[split])
+        if before > after:
+            print(
+                f"    {split}: removed {before - after} low-quality rows"
+                f" ({before} → {after})"
+            )
+
+    # ------------------------------------------------------------------
+    # Step 9: Create a validation split from the training data
     # ------------------------------------------------------------------
     # The original dataset has only 'train' and 'test' splits. We split
     # the training data further: 80% for training, 20% for validation.

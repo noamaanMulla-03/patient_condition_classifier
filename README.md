@@ -1,6 +1,6 @@
 # Patient Condition Classifier
 
-Fine-tunes **DeBERTa-v3-base** on the [UCI Drug Reviews dataset](https://archive.ics.uci.edu/dataset/462/drug+review+dataset+drugs+com) to predict patient conditions from drug review text.
+Fine-tunes **DeBERTa-v3-large** on the [UCI Drug Reviews dataset](https://archive.ics.uci.edu/dataset/462/drug+review+dataset+drugs+com) to predict patient conditions from drug review text.
 
 The pipeline loads raw TSV files, cleans and normalises the text, tokenizes reviews (512 tokens, simple truncation), fine-tunes a transformer classifier with early stopping and test-set evaluation, and saves the trained model to disk.
 
@@ -12,13 +12,13 @@ drugsComTrain_raw.tsv ─┐
 drugsComTest_raw.tsv  ─┘
 ```
 
-| Step | Module                | Description                                                                                                                                    |
-| ---- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | `src/data_loader.py`  | Reads the raw TSV files using Hugging Face `datasets`                                                                                          |
-| 2    | `src/data_cleaner.py` | Renames columns, filters nulls, lowercases text, unescapes HTML, strips junk labels, removes short reviews, creates validation split (seed=42) |
-| 3    | `src/tokenizer.py`    | Tokenizes with `microsoft/deberta-v3-base` (max 512 tokens, simple truncation), builds label mappings                                          |
-| 4    | `src/fine_tune.py`    | Fine-tunes DeBERTa-v3-base for sequence classification (accuracy + weighted F1 metrics, early stopping, test-set evaluation)                   |
-| 5    | `main.py`             | Orchestrates the full pipeline end-to-end (caches tokenized dataset to disk)                                                                   |
+| Step | Module                | Description                                                                                                                                                             |
+| ---- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | `src/data_loader.py`  | Reads the raw TSV files using Hugging Face `datasets`                                                                                                                   |
+| 2    | `src/data_cleaner.py` | Renames columns, filters nulls, lowercases text, unescapes HTML, strips junk labels, removes short reviews, filters low-rated rants, creates validation split (seed=42) |
+| 3    | `src/tokenizer.py`    | Prepends drug name to reviews, tokenizes with `microsoft/deberta-v3-large` (max 512 tokens), builds label mappings                                                      |
+| 4    | `src/fine_tune.py`    | Fine-tunes DeBERTa-v3-large with focal loss, label smoothing, increased dropout, early stopping, and test-set evaluation                                                |
+| 5    | `main.py`             | Orchestrates the full pipeline end-to-end (caches tokenized dataset to disk)                                                                                            |
 
 ## Dataset
 
@@ -43,15 +43,16 @@ The [UCI Drug Review Dataset](https://archive.ics.uci.edu/dataset/462/drug+revie
 6. **Filter** junk labels (scraper artifacts like "0 users found this comment helpful.")
 7. **Compute** `reviewLength` (word count)
 8. **Remove** reviews ≤ 30 words
-9. **Split** training data 80/20 → train / validation (original test set preserved)
+9. **Filter** low-quality reviews — drops ratings 1–3 unless other users found them helpful (`usefulCount ≥ 5`). Removes rants with zero clinical signal.
+10. **Split** training data 80/20 → train / validation (original test set preserved)
 
 ### Final splits
 
 | Split        | Approx. rows | Purpose               |
 | ------------ | ------------ | --------------------- |
-| `train`      | ~111k        | Model training        |
-| `validation` | ~28k         | Hyperparameter tuning |
-| `test`       | ~46k         | Final evaluation      |
+| `train`      | ~90k         | Model training        |
+| `validation` | ~23k         | Hyperparameter tuning |
+| `test`       | ~38k         | Final evaluation      |
 
 ## Setup
 
@@ -98,7 +99,7 @@ This will:
 2. Clean and preprocess the data
 3. Tokenize reviews using DeBERTa-v3
 4. Save the tokenized dataset to `drug-dataset/`
-5. Fine-tune the classifier (3 epochs)
+5. Fine-tune the classifier (5 epochs)
 6. Save the trained model to `results/final-model/`
 
 CLI arguments for custom paths:
@@ -182,27 +183,66 @@ The training script reports metrics on **two** held-out sets:
 
 ## Training Configuration
 
-| Parameter            | Value                                        |
-| -------------------- | -------------------------------------------- |
-| Model                | `microsoft/deberta-v3-base`                  |
-| Max sequence length  | 512 tokens                                   |
-| Batch size           | 16 (effective 32 with gradient accumulation) |
-| Learning rate        | 2e-5                                         |
-| Warmup ratio         | 10%                                          |
-| Epochs               | 3 (max)                                      |
-| Weight decay         | 0.01                                         |
-| Seed                 | 42 (reproducible)                            |
-| Mixed precision      | bf16 (if available) / fp32                   |
-| Evaluation           | Accuracy + weighted F1                       |
-| Early stopping       | Patience of 3 (1,500 steps)                  |
-| Best model selection | Highest validation accuracy                  |
-| Checkpoint retention | Last 2 checkpoints kept                      |
+| Parameter            | Value                                                   |
+| -------------------- | ------------------------------------------------------- |
+| Model                | `microsoft/deberta-v3-large` (304M params)              |
+| Max sequence length  | 512 tokens                                              |
+| Batch size           | 8 per GPU (effective 32 with gradient accumulation × 4) |
+| Learning rate        | 2e-5                                                    |
+| LR scheduler         | Cosine with 10% linear warmup                           |
+| Epochs               | 5 (max, with early stopping)                            |
+| Weight decay         | 0.01                                                    |
+| Dropout              | 0.2 hidden, 0.2 attention, 0.3 classifier               |
+| Loss function        | Focal loss (γ=2) with label smoothing (0.1)             |
+| Class weights        | Inverse-frequency per class                             |
+| Seed                 | 42 (reproducible)                                       |
+| Mixed precision      | bf16 (if available) / fp32                              |
+| Evaluation           | Accuracy + weighted F1                                  |
+| Early stopping       | Patience of 3 (1,500 steps)                             |
+| Best model selection | Highest validation accuracy                             |
+| Checkpoint retention | Last 2 checkpoints kept                                 |
+
+### Model Variants
+
+The default pipeline uses DeBERTa-v3-large for maximum accuracy on cloud GPUs. For local training, you can swap to a lighter model by changing the `checkpoint` variable in `main.py`:
+
+| Model                         | Params | VRAM (bf16) | Accuracy (est.) | Best for                        |
+| ----------------------------- | ------ | ----------- | --------------- | ------------------------------- |
+| `microsoft/deberta-v3-base`   | 184M   | ~8 GB       | ~73%            | T4, laptop GPU, fast iteration  |
+| `microsoft/deberta-v3-large`  | 304M   | ~14 GB      | ~77%            | A10G, L4, best accuracy         |
+| `distilbert-base-uncased`     | 67M    | ~4 GB       | ~68%            | CPU training, Colab free tier   |
+| `microsoft/deberta-v3-xsmall` | 22M    | ~2 GB       | ~62%            | Quick prototyping, edge devices |
+
+To switch models locally:
+
+```python
+# In main.py, change line ~71:
+checkpoint = "microsoft/deberta-v3-base"  # or distilbert-base-uncased, etc.
+```
+
+> **Note:** `distilbert-base-uncased` uses a different tokenizer — update `from_pretrained(checkpoint)` calls accordingly. DeBERTa variants share the same tokenizer.
 
 > **Note:** DeBERTa-v3 does not support fp16 due to its disentangled attention mechanism. The pipeline automatically uses bf16 on Ampere+ GPUs (A100, A10G, L4) and falls back to fp32 on T4 and Apple Silicon.
 
+### Key techniques
+
+- **Drug name prepended to review** — `"Drug: Levora. Review: ..."` gives the model a free predictive signal (Levora → birth control)
+- **Focal loss (γ=2.0)** — down-weights easy/common classes so the model focuses on rare/hard conditions
+- **Label smoothing (0.1)** — prevents overconfidence on frequent classes, reserving probability for rare ones
+- **Increased dropout** — forces the model to read the full review instead of pattern-matching surface-level words
+- **Rating-based quality filter** — removes reviews rated 1–3 that are pure rants with no clinical content
+
+## Results
+
+| Experiment                                        | Accuracy    | Weighted F1 |
+| ------------------------------------------------- | ----------- | ----------- |
+| DeBERTa-v3-base, 128 tokens, basic CE (T4)        | 67.4%       | 63.9%       |
+| DeBERTa-v3-base, 512 tokens, basic CE (L4)        | 73.3%       | 69.6%       |
+| **DeBERTa-v3-large, 512 tokens, focal loss (L4)** | **running** | **running** |
+
 ### SageMaker Instance
 
-Default instance: **`ml.g6.xlarge`** (NVIDIA L4, 24 GB VRAM). This enables bf16 training at ~$0.80/hr — roughly 2–3× faster than a T4 (`ml.g4dn.xlarge`) for ~10% higher cost per hour, making it cheaper per training run overall. Instance type can be changed in `.config.yaml`.
+Default instance: **`ml.g6.xlarge`** (NVIDIA L4, 24 GB VRAM). This enables bf16 training at ~$0.80/hr.
 
 ## Project Structure
 
@@ -223,7 +263,7 @@ patient-condition-classifier/
     ├── data_loader.py       # Loads raw TSV files
     ├── data_cleaner.py      # Cleans and preprocesses (8 steps)
     ├── tokenizer.py         # Tokenizes with truncation (512 tokens) + label mapping
-    └── fine_tune.py         # Fine-tunes DeBERTa-v3-base classifier
+    ├── fine_tune.py         # Fine-tunes with focal loss, label smoothing, dropout
 ```
 
 ## License
