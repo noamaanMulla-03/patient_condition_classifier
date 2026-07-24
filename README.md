@@ -234,11 +234,15 @@ checkpoint = "microsoft/deberta-v3-base"  # or distilbert-base-uncased, etc.
 
 ## Results
 
-| Experiment                                        | Accuracy    | Weighted F1 |
-| ------------------------------------------------- | ----------- | ----------- |
-| DeBERTa-v3-base, 128 tokens, basic CE (T4)        | 67.4%       | 63.9%       |
-| DeBERTa-v3-base, 512 tokens, basic CE (L4)        | 73.3%       | 69.6%       |
-| **DeBERTa-v3-large, 512 tokens, focal loss (L4)** | **running** | **running** |
+All scores are on the held-out test set (unseen during training).
+
+| Experiment                                                          | Accuracy  | Weighted F1 |
+| ------------------------------------------------------------------- | --------- | ----------- |
+| DeBERTa-v3-base, 128 tokens, basic CE (T4, fp32)                    | 67.4%     | 63.9%       |
+| DeBERTa-v3-base, 512 tokens, basic CE (L4, bf16)                    | 73.1%     | 69.4%       |
+| **DeBERTa-v3-large, 512 tokens, focal loss + all fixes (L4, bf16)** | **82.8%** | **81.0%**   |
+
+**+15.4 percentage points** from baseline to final (67.4% → 82.8%).
 
 ### SageMaker Instance
 
