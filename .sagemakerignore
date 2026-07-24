@@ -1,0 +1,15 @@
+# Exclude from SageMaker source package (only src/ and main.py are needed)
+.venv
+__pycache__
+data
+drug-dataset
+results
+logs
+.git
+.gitignore
+.idea
+.vscode
+.DS_Store
+*.tsv
+*.arrow
+*.safetensors

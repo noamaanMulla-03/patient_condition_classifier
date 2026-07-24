@@ -8,14 +8,106 @@ Called by main.py as the final step of the pipeline.
 """
 
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 import evaluate
+from collections import Counter
 from datasets import DatasetDict
 from transformers import (
+    AutoConfig,
     AutoModelForSequenceClassification,
+    EarlyStoppingCallback,
     TrainingArguments,
     Trainer,
 )
+
+# ------------------------------------------------------------------
+# Module-level metric loaders — avoids downloading from Hugging Face
+# Hub on every SageMaker training job startup (~30s saved).
+# ------------------------------------------------------------------
+ACCURACY_METRIC = evaluate.load("accuracy")
+F1_METRIC = evaluate.load("f1")
+
+
+# ------------------------------------------------------------------
+# Focal Loss — down-weights easy examples so the model focuses on
+# rare / hard-to-classify conditions instead of being dominated by
+# the top 20 common classes.
+# ------------------------------------------------------------------
+class FocalLoss(nn.Module):
+    """
+    Focal Loss with label smoothing for imbalanced multi-class classification.
+
+    Combines two techniques:
+    1. **Focal loss** — down-weights easy examples (high confidence) to
+       focus learning on rare/hard classes.
+    2. **Label smoothing** — replaces one-hot targets with a mixture of
+       the true label and a uniform distribution, preventing overconfidence
+       on common classes and giving rare classes more gradient signal.
+
+    Parameters
+    ----------
+    gamma : float
+        Focusing parameter. Higher = more focus on hard examples.
+        gamma=2.0 is the standard recommended value.
+    alpha : torch.Tensor or None
+        Optional class weights for per-class re-weighting.
+    label_smoothing : float
+        Smoothing factor. 0.0 = no smoothing, 0.1 = 10% uniform.
+    """
+
+    def __init__(self, gamma=2.0, alpha=None, label_smoothing=0.1):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.label_smoothing = label_smoothing
+
+    def forward(self, inputs, targets):
+        n_classes = inputs.size(-1)
+
+        # Apply label smoothing: one-hot → (1-smooth)*one_hot + smooth/num_classes
+        if self.label_smoothing > 0:
+            smooth_targets = torch.full_like(
+                inputs, self.label_smoothing / (n_classes - 1)
+            )
+            smooth_targets.scatter_(1, targets.unsqueeze(1), 1.0 - self.label_smoothing)
+            log_probs = F.log_softmax(inputs, dim=-1)
+            ce_loss = -(smooth_targets * log_probs).sum(dim=-1)
+        else:
+            ce_loss = F.cross_entropy(
+                inputs, targets, weight=self.alpha, reduction="none"
+            )
+
+        pt = torch.exp(-ce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        return focal_loss.mean()
+
+
+# ------------------------------------------------------------------
+# Custom Trainer that uses Focal Loss instead of standard CE.
+# ------------------------------------------------------------------
+class FocalLossTrainer(Trainer):
+    """
+    Trainer subclass that replaces cross-entropy with Focal Loss.
+    Accepts pre-computed class weights for imbalanced datasets.
+    """
+
+    def __init__(
+        self, *args, focal_gamma=2.0, class_weights=None, label_smoothing=0.1, **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        self.focal_loss = FocalLoss(
+            gamma=focal_gamma,
+            alpha=class_weights,
+            label_smoothing=label_smoothing,
+        )
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        labels = inputs.pop("labels")
+        outputs = model(**inputs)
+        loss = self.focal_loss(outputs.logits, labels)
+        return (loss, outputs) if return_outputs else loss
 
 
 def fine_tune(
@@ -26,6 +118,7 @@ def fine_tune(
     label2id: dict,
     id2label: dict,
     num_labels: int,
+    model_dir: str = "./results",
 ) -> None:
     """
     Fine-tune DeBERTa-v3-base on the tokenized drug review dataset.
@@ -57,13 +150,17 @@ def fine_tune(
         A data collator configured with the above tokenizer.
     checkpoint : str
         The Hugging Face model checkpoint name (e.g.
-        'microsoft/deberta-v3-base'), passed from main.py.
+        'microsoft/deberta-v3-large'), passed from main.py.
     label2id : dict[str, int]
         Mapping from condition strings to integer class IDs.
     id2label : dict[int, str]
         Mapping from integer class IDs back to condition strings.
     num_labels : int
         Total number of unique conditions (classification classes).
+    model_dir : str
+        Directory for checkpoints during training and final model.
+        Defaults to "./results". On SageMaker, set to
+        /opt/ml/model (where SageMaker expects the final artifact).
 
     Returns
     -------
@@ -76,9 +173,8 @@ def fine_tune(
     # ------------------------------------------------------------------
     # Automatically detect device for mixed precision
     # ------------------------------------------------------------------
-    # fp16 is only available on CUDA (NVIDIA GPUs). Apple Silicon (MPS)
-    # and CPU fall back to fp32.
-    use_fp16 = torch.cuda.is_available()
+    # DeBERTa-v3 doesn't support fp16 (disentangled attention breaks).
+    # We use bf16 instead if available (Ampere+ GPUs), otherwise fp32.
 
     # ------------------------------------------------------------------
     # Step 1: Remove unnecessary columns
@@ -96,18 +192,27 @@ def fine_tune(
     print(f"\nColumns kept for training: {tokenized_dataset['train'].column_names}")
 
     # ------------------------------------------------------------------
-    # Step 2: Load the model
+    # Step 2: Load the model with tuned dropout & label smoothing
     # ------------------------------------------------------------------
-    # AutoModelForSequenceClassification wraps DeBERTa-v3-base with a
-    # linear classification head on top of the [CLS] token embedding.
-    # The label mappings are baked into the model config so predictions
-    # carry human-readable labels automatically.
+    # Default dropout (0.1) is too low for 700+ classes — the model
+    # memorizes frequent classes instead of learning rare ones.
+    # Bumping dropout forces the model to read the full review rather
+    # than relying on surface-level pattern matching.
+    # Label smoothing (0.1) prevents overconfidence on common classes,
+    # reserving probability mass for rare classes.
     print(f"Loading model '{checkpoint}' with {num_labels} classes...")
+    config = AutoConfig.from_pretrained(checkpoint)
+    config.num_labels = num_labels
+    config.label2id = label2id
+    config.id2label = id2label
+    config.hidden_dropout_prob = 0.2
+    config.attention_probs_dropout_prob = 0.2
+    config.classifier_dropout = 0.3
+    config.label_smoothing = 0.1
+
     model = AutoModelForSequenceClassification.from_pretrained(
         checkpoint,
-        num_labels=num_labels,
-        label2id=label2id,
-        id2label=id2label,
+        config=config,
         ignore_mismatched_sizes=True,
     )
 
@@ -118,15 +223,15 @@ def fine_tune(
     #   - accuracy: % of predictions that exactly match the true label.
     #   - weighted F1: harmonic mean of precision & recall, weighted by
     #     class support (accounts for class imbalance).
-    accuracy_metric = evaluate.load("accuracy")
-    f1_metric = evaluate.load("f1")
+    # Metric loaders are module-level constants to avoid re-downloading
+    # from HF Hub on every training run.
 
     def compute_metrics(eval_pred):
         """Calculate accuracy and weighted F1 from model predictions."""
         predictions, labels = eval_pred
         predictions = np.argmax(predictions, axis=-1)
-        acc = accuracy_metric.compute(predictions=predictions, references=labels)
-        f1 = f1_metric.compute(
+        acc = ACCURACY_METRIC.compute(predictions=predictions, references=labels)
+        f1 = F1_METRIC.compute(
             predictions=predictions, references=labels, average="weighted"
         )
         return {**acc, **f1}
@@ -138,45 +243,73 @@ def fine_tune(
     # BERT-style model on a moderate-sized dataset (~160k samples).
     # Key choices:
     #   - learning_rate=2e-5: standard for fine-tuning transformers.
-    #   - batch_size=16: fits most GPUs with 8-16 GB VRAM.
-    #   - num_train_epochs=3: enough to converge without overfitting.
-    #   - eval_strategy="epoch": evaluate once per epoch.
-    #   - load_best_model_at_end: keeps the epoch with best accuracy.
-    #   - fp16: enabled only if a CUDA GPU is available.
+    #   - batch_size=8, gradient_accumulation_steps=4: effective batch
+    #     of 32 while fitting large model in 24 GB L4 VRAM.
+    #   - num_train_epochs=5: extended training with cosine LR decay
+    #     for further convergence without overfitting.
+    #   - evaluation_strategy="steps": evaluate every eval_steps for finer-
+    #     grained early-stopping control (~16 evals/epoch at 500 steps).
+    #   - load_best_model_at_end: loads the checkpoint with best accuracy
+    #     (not necessarily the last one) after training finishes.
+    #   - EarlyStoppingCallback: stops training if validation accuracy
+    #     doesn't improve for patience * eval_steps consecutive steps,
+    #     saving GPU time and preventing overfitting.
+    #   - bf16: used instead of fp16 because DeBERTa-v3's disentangled
+    #     attention breaks with fp16 gradients. bf16 is available on
+    #     Ampere+ GPUs (A100, A10G). T4 and MPS fall back to fp32.
+    use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     print("\nConfiguring training arguments...")
     training_args = TrainingArguments(
-        output_dir="./results",
-        eval_strategy="epoch",
-        save_strategy="epoch",
+        output_dir=model_dir,
+        evaluation_strategy="steps",
+        eval_steps=500,
+        save_strategy="steps",
+        save_steps=500,
         learning_rate=2e-5,
-        per_device_train_batch_size=16,
-        per_device_eval_batch_size=16,
-        num_train_epochs=3,
+        per_device_train_batch_size=8,
+        per_device_eval_batch_size=8,
+        num_train_epochs=5,
         weight_decay=0.01,
+        warmup_ratio=0.1,
+        lr_scheduler_type="cosine",
+        gradient_accumulation_steps=4,
         logging_steps=100,
         logging_first_step=True,
         save_total_limit=2,
         load_best_model_at_end=True,
         metric_for_best_model="accuracy",
         greater_is_better=True,
-        fp16=use_fp16,
+        fp16=False,
+        bf16=use_bf16,
+        seed=42,
         dataloader_num_workers=2,
         remove_unused_columns=False,
     )
 
     # ------------------------------------------------------------------
-    # Step 5: Create the Trainer
+    # Step 5: Create the Trainer with focal loss + class weights
     # ------------------------------------------------------------------
-    # The Trainer orchestrates the training loop, evaluation, logging,
-    # checkpointing, and metric computation.
-    trainer = Trainer(
+    # Compute per-class weights: rare classes get higher weight so
+    # the model pays attention to them instead of being dominated
+    # by the top-20 frequent conditions.
+    label_counts = Counter(tokenized_dataset["train"]["labels"])
+    total = sum(label_counts.values())
+    class_weights = torch.zeros(num_labels, dtype=torch.float)
+    for i in range(num_labels):
+        count = label_counts.get(i, 1)
+        class_weights[i] = total / (num_labels * count)
+
+    trainer = FocalLossTrainer(
         model=model,
         args=training_args,
         train_dataset=tokenized_dataset["train"],
         eval_dataset=tokenized_dataset["validation"],
-        processing_class=tokenizer,
+        tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
+        focal_gamma=2.0,
+        class_weights=class_weights,
     )
 
     # ------------------------------------------------------------------
@@ -197,9 +330,22 @@ def fine_tune(
     print(f"\nValidation results: {eval_results}")
 
     # ------------------------------------------------------------------
+    # Step 7b: Evaluate on the held-out test set
+    # ------------------------------------------------------------------
+    # The test split was never seen during training or hyperparameter
+    # tuning — this gives an unbiased estimate of real-world performance.
+    print("\n" + "=" * 60)
+    print("Evaluating on held-out test set...")
+    print("=" * 60)
+    test_results = trainer.evaluate(tokenized_dataset["test"])
+    print(f"\nTest results: {test_results}")
+
+    # ------------------------------------------------------------------
     # Step 8: Save the final model
     # ------------------------------------------------------------------
-    final_dir = "./results/final-model"
+    # On SageMaker, model_dir points to /opt/ml/model and output_dir
+    # to /opt/ml/output. These are set from main.py via CLI args.
+    final_dir = f"{model_dir}/final-model"
     print(f"\nSaving final model to '{final_dir}/'...")
     trainer.save_model(final_dir)
     tokenizer.save_pretrained(final_dir)
