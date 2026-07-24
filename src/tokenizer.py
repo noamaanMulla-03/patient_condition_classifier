@@ -2,9 +2,8 @@
 Tokenization module for the Patient Condition Classifier.
 
 Handles conversion of raw review text into model-ready token IDs
-using the Hugging Face Transformers library. Includes overflow
-handling for long reviews that exceed the model's maximum context
-length.
+using the Hugging Face Transformers library. Prepends drug names
+to reviews and truncates to 512 tokens (DeBERTa-v3's max context).
 
 The tokenizer is passed in from main.py to keep it as the single
 source of configuration and avoid duplicate loading.
@@ -75,8 +74,8 @@ def tokenize_data(dataset, tokenizer):
     This function is designed to be called after data_cleaner.clean_data()
     so the dataset has already been filtered, normalised, and split into
     train/validation/test. It performs two steps:
-      1. Tokenizes review text → input_ids & attention_mask (with
-         overflow handling for sequences > 128 tokens).
+      1. Tokenizes review text → input_ids & attention_mask
+         (512-token truncation with drug name prepended).
       2. Builds label mappings from the training split and converts
          condition strings to integer label IDs.
 
@@ -94,8 +93,7 @@ def tokenize_data(dataset, tokenizer):
     -------
     tuple[DatasetDict, dict[str, int], dict[int, str], int]
         - tokenized_dataset: DatasetDict with input_ids, attention_mask,
-          token_type_ids, and labels columns added; rows may be expanded
-          due to overflow splitting.
+          token_type_ids, and labels columns added; one row per review.
         - label2id: dict mapping each condition string to an integer ID.
         - id2label: dict mapping each integer ID back to a condition string.
         - num_labels: total number of unique conditions (class count).

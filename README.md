@@ -1,6 +1,6 @@
 # Patient Condition Classifier
 
-Fine-tunes **DeBERTa-v3-large** on the [UCI Drug Reviews dataset](https://archive.ics.uci.edu/dataset/462/drug+review+dataset+drugs+com) to predict patient conditions from drug review text.
+Fine-tunes **DeBERTa-v3-large** on the [UCI Drug Reviews dataset](https://archive.ics.uci.edu/dataset/462/drug+review+dataset+drugs+com) to classify patient drug reviews into one of **700+ medical conditions**.
 
 The pipeline loads raw TSV files, cleans and normalises the text, tokenizes reviews (512 tokens, simple truncation), fine-tunes a transformer classifier with early stopping and test-set evaluation, and saves the trained model to disk.
 
@@ -58,13 +58,13 @@ The [UCI Drug Review Dataset](https://archive.ics.uci.edu/dataset/462/drug+revie
 
 ### Prerequisites
 
-- Python ≥ 3.13
+- Python ≥ 3.10
 
 ### Installation
 
 ```bash
 # Clone the repository
-git clone <repo-url>
+git clone https://github.com/noamaan/patient-condition-classifier.git
 cd patient-condition-classifier
 
 # Create and activate a virtual environment
@@ -143,13 +143,15 @@ from datasets import load_from_disk
 dataset = load_from_disk("drug-dataset")
 print(dataset)
 # DatasetDict({
-#     train:       Dataset({ features: [...], num_rows: 110811 })
-#     validation:  Dataset({ features: [...], num_rows: 27703 })
-#     test:        Dataset({ features: [...], num_rows: 46108 })
+#     train:       Dataset({ features: [...], num_rows: 90000 })
+#     validation:  Dataset({ features: [...], num_rows: 23000 })
+#     test:        Dataset({ features: [...], num_rows: 38000 })
 # })
 ```
 
 ### Inference
+
+> **Important:** The model was trained with the drug name prepended. Use `Drug: <name>. Review: <text>` for best accuracy. Omitting it still works but drops accuracy by a few points.
 
 ```python
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
@@ -157,7 +159,7 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 model = AutoModelForSequenceClassification.from_pretrained("results/final-model")
 tokenizer = AutoTokenizer.from_pretrained("results/final-model")
 
-review = "I've been taking this for 3 months and my anxiety has significantly reduced."
+review = "Drug: zoloft. Review: I've been taking this for 3 months and my anxiety has significantly reduced."
 inputs = tokenizer(review, truncation=True, max_length=512, return_tensors="pt")
 outputs = model(**inputs)
 predicted_id = outputs.logits.argmax(dim=-1).item()
@@ -170,7 +172,7 @@ Or use the `pipeline` API:
 from transformers import pipeline
 
 classifier = pipeline("text-classification", model="results/final-model", tokenizer="results/final-model")
-result = classifier("I've been taking this for 3 months and my anxiety has significantly reduced.")
+result = classifier("Drug: zoloft. Review: I've been taking this for 3 months and my anxiety has significantly reduced.")
 print(result[0]["label"])  # predicted condition
 ```
 
@@ -186,6 +188,7 @@ The training script reports metrics on **two** held-out sets:
 | Parameter            | Value                                                   |
 | -------------------- | ------------------------------------------------------- |
 | Model                | `microsoft/deberta-v3-large` (304M params)              |
+| Output classes       | 700+ medical conditions                                 |
 | Max sequence length  | 512 tokens                                              |
 | Batch size           | 8 per GPU (effective 32 with gradient accumulation × 4) |
 | Learning rate        | 2e-5                                                    |
@@ -209,7 +212,7 @@ The default pipeline uses DeBERTa-v3-large for maximum accuracy on cloud GPUs. F
 | Model                         | Params | VRAM (bf16) | Accuracy (est.) | Best for                        |
 | ----------------------------- | ------ | ----------- | --------------- | ------------------------------- |
 | `microsoft/deberta-v3-base`   | 184M   | ~8 GB       | ~73%            | T4, laptop GPU, fast iteration  |
-| `microsoft/deberta-v3-large`  | 304M   | ~14 GB      | ~77%            | A10G, L4, best accuracy         |
+| `microsoft/deberta-v3-large`  | 304M   | ~14 GB      | ~83%            | A10G, L4, best accuracy         |
 | `distilbert-base-uncased`     | 67M    | ~4 GB       | ~68%            | CPU training, Colab free tier   |
 | `microsoft/deberta-v3-xsmall` | 22M    | ~2 GB       | ~62%            | Quick prototyping, edge devices |
 
@@ -265,8 +268,8 @@ patient-condition-classifier/
 ├── results/                 # Trained model checkpoints (gitignored)
 └── src/
     ├── data_loader.py       # Loads raw TSV files
-    ├── data_cleaner.py      # Cleans and preprocesses (8 steps)
-    ├── tokenizer.py         # Tokenizes with truncation (512 tokens) + label mapping
+    ├── data_cleaner.py      # Cleans and preprocesses (10 steps)
+    ├── tokenizer.py         # Tokenizes with drug name prepending + truncation (512 tokens)
     ├── fine_tune.py         # Fine-tunes with focal loss, label smoothing, dropout
 ```
 
